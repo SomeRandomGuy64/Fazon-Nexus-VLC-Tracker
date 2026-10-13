@@ -15,7 +15,7 @@ The first time, it asks for your API key and keeps it in fazon_track_key.conf in
 folder (as a curl header, so it never shows up in the process list).
 ]]
 
-local VERSION = "1.0.0"
+local VERSION = "1.0.1"
 
 -- Settings
 local API = "https://api.fazon.nexus/v1/api/track" -- only change this for your own copy of the site
@@ -23,7 +23,7 @@ local CONTINUE_ON_NEXT_FILE = true -- keep tracking when the playlist moves on, 
 local DEFAULT_SUBCAT = ""          -- suggest this name instead of the title, e.g. "Anime"
 
 local LABEL = { active = "Active immersion", passive = "Passive immersion" }
-local WINDOWS = package.config:sub(1, 1) == "\\"
+local WINDOWS = false -- set in activate(): VLC scans extensions without the package library
 local json
 local key_file, state_dir, pending_file
 
@@ -415,6 +415,7 @@ function descriptor()
 end
 
 function activate()
+    WINDOWS = (type(package) == "table" and package.config:sub(1, 1) == "\\") or os.getenv("OS") == "Windows_NT"
     json = require("dkjson")
     key_file = vlc.config.configdir() .. "/fazon_track_key.conf"
     state_dir = vlc.config.userdatadir() .. "/fazon_track"
