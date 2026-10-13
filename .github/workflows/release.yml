@@ -48,6 +48,9 @@ jobs:
       - name: Check VLC can scan it (VLC loads extensions without the package library)
         run: lua5.2 -e 'package = nil' -e 'dofile("fazon_track.lua"); assert(descriptor().version)'
 
+      - name: Check it only uses what VLC gives extensions (no vlc.misc, unlike interface scripts)
+        run: "! grep -n 'vlc%.misc\\|vlc\\.misc' fazon_track.lua"
+
       - name: Create or update the release
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then

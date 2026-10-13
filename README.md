@@ -116,6 +116,9 @@ changing them:
   the nearest step (18 seconds or more counts as 0.01 h). Your Track ends up within about
   18 seconds of your real watch time per session.
 - Time is **added** to the sub-category's total for the week, never replacing what's there.
+- Time is measured with the system clock. If the computer sleeps while VLC is playing, the
+  sleep doesn't count: when the clock has moved more than 10 minutes further than the video, the
+  video's progress is used instead.
 
 ## Good to know
 

@@ -15,7 +15,7 @@ The first time, it asks for your API key and keeps it in fazon_track_key.conf in
 folder (as a curl header, so it never shows up in the process list).
 ]]
 
-local VERSION = "1.0.1"
+local VERSION = "1.0.2"
 
 -- Settings
 local API = "https://api.fazon.nexus/v1/api/track" -- only change this for your own copy of the site
@@ -28,7 +28,7 @@ local json
 local key_file, state_dir, pending_file
 
 local track = nil      -- {category, name, uri, secs}
-local play_since = nil -- vlc.misc.mdate() when playback (of the tracked video) last started
+local play_since = nil -- mark() when playback (of the tracked video) last started
 local log = {}         -- {week, category, name, secs}: time not yet sent
 local dlg, name_input, key_input, note = nil, nil, nil, nil
 
@@ -55,20 +55,51 @@ local function close_dialog()
     dlg, name_input, key_input, note = nil, nil, nil, nil
 end
 
+-- Dialog labels are shown as HTML: escape the text and keep its line breaks.
+local function html(text)
+    return (tostring(text):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub("\n", "<br>"))
+end
+
 -- A small window with a message (VLC shows no on-screen text for audio-only files).
 local function message(text)
     close_dialog()
     dlg = vlc.dialog("Fazon Track")
-    dlg:add_label(text, 1, 1, 1, 1)
+    dlg:add_label(html(text), 1, 1, 1, 1)
     dlg:add_button("OK", close_dialog, 1, 2, 1, 1)
     dlg:show()
     vlc.msg.info("[Fazon Track] " .. text)
 end
 
+-- Run f, showing any error instead of failing silently (VLC only logs them).
+local function guard(f)
+    return function(...)
+        local ok, err = pcall(f, ...)
+        if not ok then
+            vlc.msg.err("[Fazon Track] " .. tostring(err))
+            pcall(message, "Fazon Track hit a problem. Please report it at\n"
+                .. "https://github.com/SomeRandomGuy64/Fazon-Nexus-VLC-Tracker/issues\n\n" .. tostring(err))
+        end
+    end
+end
+
+-- Now, for timing: the system clock (extensions get no VLC clock) and, to notice the computer
+-- sleeping mid-video, the playback position and speed.
+local function mark()
+    local m = { t = os.time() }
+    local input = vlc.object.input()
+    if input then
+        local ok, pos = pcall(vlc.var.get, input, "time")
+        local ok2, rate = pcall(vlc.var.get, input, "rate")
+        if ok and type(pos) == "number" then m.pos = pos end
+        m.rate = ok2 and type(rate) == "number" and rate > 0 and rate or 1
+    end
+    return m
+end
+
 -- A problem with what was typed into the open dialog: say so in it, so it can be fixed there.
 local function tell(text)
     if not note then return message(text) end
-    note:set_text(text)
+    note:set_text(html(text))
     vlc.msg.info("[Fazon Track] " .. text)
 end
 
@@ -217,8 +248,13 @@ end
 -- Move the time played since play_since into the log (split if a new week started meanwhile).
 local function bank()
     if not track or not play_since then return end
-    local now = vlc.misc.mdate()
-    local secs = (now - play_since) / 1e6
+    local now = mark()
+    local secs = now.t - play_since.t
+    if play_since.pos and now.pos then
+        -- Over 10 minutes more than actually played: the computer slept while "playing".
+        local played = (now.pos - play_since.pos) / 1e6 / play_since.rate
+        if played >= 0 and secs - played > 600 then secs = played end
+    end
     play_since = now
     if secs <= 0 then return end
     track.secs = track.secs + secs
@@ -293,7 +329,7 @@ local function start_tracking(category)
     close_dialog()
     stop_tracking(true)
     track = { category = category, name = stored, uri = item:uri(), secs = 0 }
-    play_since = vlc.playlist.status() == "playing" and vlc.misc.mdate() or nil
+    play_since = vlc.playlist.status() == "playing" and mark() or nil
     osd("● " .. LABEL[category] .. " › " .. stored)
 end
 
@@ -302,10 +338,10 @@ local function start_dialog()
     local item = vlc.input.item()
     if not item then return message("Play something first, then start tracking it.") end
     dlg = vlc.dialog("Fazon Track")
-    dlg:add_label("Log what's playing to your Track. Sub-category (max 40 characters):", 1, 1, 3, 1)
+    dlg:add_label(html("Log what's playing to your Track. Sub-category (max 40 characters):"), 1, 1, 3, 1)
     name_input = dlg:add_text_input(default_name(item), 1, 2, 3, 1)
-    dlg:add_button("Active immersion", function() start_tracking("active") end, 1, 3, 1, 1)
-    dlg:add_button("Passive immersion", function() start_tracking("passive") end, 2, 3, 1, 1)
+    dlg:add_button("Active immersion", guard(function() start_tracking("active") end), 1, 3, 1, 1)
+    dlg:add_button("Passive immersion", guard(function() start_tracking("passive") end), 2, 3, 1, 1)
     dlg:add_button("Cancel", close_dialog, 3, 3, 1, 1)
     note = dlg:add_label("", 1, 4, 3, 1)
     dlg:show()
@@ -345,7 +381,7 @@ local function changed()
         end
         track.name, track.uri = stored, item:uri()
     end
-    play_since = playing and vlc.misc.mdate() or nil
+    play_since = playing and mark() or nil
     if moved or not playing then send(false) end
 end
 
@@ -392,9 +428,9 @@ end
 local function key_dialog()
     close_dialog()
     dlg = vlc.dialog("Fazon Track: API key")
-    dlg:add_label("Paste a Read & write API key from your fazon.nexus profile (Developers section):", 1, 1, 2, 1)
+    dlg:add_label(html("Paste a Read & write API key from your fazon.nexus profile (Developers section):"), 1, 1, 2, 1)
     key_input = dlg:add_password("", 1, 2, 2, 1)
-    dlg:add_button("Save", save_key, 1, 3, 1, 1)
+    dlg:add_button("Save", guard(save_key), 1, 3, 1, 1)
     dlg:add_button("Cancel", close_dialog, 2, 3, 1, 1)
     note = dlg:add_label("", 1, 4, 2, 1)
     dlg:show()
@@ -414,7 +450,7 @@ function descriptor()
     }
 end
 
-function activate()
+activate = guard(function()
     WINDOWS = (type(package) == "table" and package.config:sub(1, 1) == "\\") or os.getenv("OS") == "Windows_NT"
     json = require("dkjson")
     key_file = vlc.config.configdir() .. "/fazon_track_key.conf"
@@ -423,26 +459,27 @@ function activate()
     math.randomseed(os.time())
     pending_file = string.format("%s/pending-%d-%d.json", state_dir, os.time(), math.random(1e6))
     if exists(key_file) then begin() else key_dialog() end
-end
+end)
 
-function deactivate()
+deactivate = guard(function()
     stop_tracking(true)
     if key_file and exists(key_file) then send(true) end
     close_dialog()
-end
+end)
 
 function close() close_dialog() end
 
 function menu() return { "Start tracking…", "Stop tracking", "Status", "Set API key…" } end
 
-function trigger_menu(id)
+trigger_menu = guard(function(id)
     if id == 1 then
         if exists(key_file) then start_dialog() else key_dialog() end
     elseif id == 2 then
         if track then stop_tracking() else message("Not tracking.") end
     elseif id == 3 then status()
     elseif id == 4 then key_dialog() end
-end
+end)
 
-function playing_changed() changed() end
-function input_changed() changed() end
+playing_changed = guard(changed)
+input_changed = guard(changed)
+function meta_changed() end -- VLC calls it even without "meta-listener"
